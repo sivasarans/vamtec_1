@@ -1,0 +1,276 @@
+-- Roles Table
+CREATE TABLE Roles (
+    id        SERIAL PRIMARY KEY,
+    role_name VARCHAR(50) UNIQUE NOT NULL
+);
+
+CREATE TABLE Users (
+    id               SERIAL PRIMARY KEY,
+    name             VARCHAR(100) NOT NULL,
+    email            VARCHAR(150),
+    user_id          VARCHAR(150) UNIQUE,
+    role_name        VARCHAR(50) REFERENCES Roles(role_name),
+    password         VARCHAR(255),
+    profile_picture  VARCHAR(255),
+    gender           VARCHAR(10),
+    joining_date     DATE,
+    status           VARCHAR(50)
+);
+
+--------------------------permission-----------------------
+-- Drop Permissions table if it already exists
+DROP TABLE IF EXISTS Permissions CASCADE;
+
+-- Step 1: Recreate the Permissions Table
+CREATE TABLE Permissions (
+    id          SERIAL PRIMARY KEY,
+    user_id     VARCHAR(150) REFERENCES Users(user_id) ON DELETE CASCADE,
+    username    VARCHAR(100), -- This will store the username automatically
+    date        DATE NOT NULL,
+    in_time     TIME NOT NULL, -- Start time of the workday
+    out_time    TIME NOT NULL, -- End time of the workday
+    total_hours FLOAT GENERATED ALWAYS AS (
+        EXTRACT(EPOCH FROM (out_time - in_time)) / 3600
+    ) STORED,
+    status      VARCHAR(50) DEFAULT 'Pending',
+    reason      TEXT,
+    CONSTRAINT check_time_validity CHECK (out_time > in_time)
+);
+
+-- Step 2: Create a Trigger Function to Fetch Username
+CREATE OR REPLACE FUNCTION set_username_from_user_id()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Fetch username based on the provided user_id
+    SELECT name INTO NEW.username
+    FROM Users
+    WHERE user_id = NEW.user_id;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Step 3: Create a Trigger to Automatically Update Username
+CREATE TRIGGER trigger_set_username
+BEFORE INSERT ON Permissions
+FOR EACH ROW
+EXECUTE FUNCTION set_username_from_user_id();
+
+------------------------------------------------------------------
+
+--LEAVE STATUS
+CREATE TABLE leave_applications ( 
+  id SERIAL PRIMARY KEY,  -- Automatically increments for each new entry
+  user_id VARCHAR NOT NULL,  -- Foreign key referencing user ID
+  user_name VARCHAR(255) NOT NULL,  -- User's name (from users table)
+  leave_type VARCHAR(50) NOT NULL,  -- Type of leave (e.g., 'EL', 'SL')
+  from_date DATE NOT NULL,  -- Start date of the leave
+  to_date DATE NOT NULL,  -- End date of the leave
+  leave_days INT NOT NULL,  -- Total days for the leave
+  reason TEXT,  -- Reason for the leave
+  status VARCHAR(20) DEFAULT 'Pending',  -- Status of the leave request (default is 'Pending')
+  applied_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,  -- Date and time when the application was submitted
+  FOREIGN KEY (user_id) REFERENCES users(user_id)  -- Assuming you have a users table to reference user IDs
+);
+ALTER TABLE leave_applications
+ADD COLUMN file VARCHAR(255);
+
+ALTER TABLE leave_applications
+ADD COLUMN reject_reason TEXT;
+
+CREATE OR REPLACE FUNCTION leave_application_validation_for_joining_date()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Check if the leave from_date is after the user's joining_date
+  IF NEW.from_date < (SELECT joining_date FROM users WHERE user_id = NEW.user_id) THEN
+    RAISE EXCEPTION 'Leave start date cannot be earlier than the joining date.';
+  END IF;
+  
+  -- Return the new row to continue with the insert
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER leave_application_validation_for_joining_date
+BEFORE INSERT OR UPDATE ON leave_applications
+FOR EACH ROW
+EXECUTE FUNCTION leave_application_validation_for_joining_date();
+ -- # unable to delete user, that;s why it's applied:
+ALTER TABLE leave_applications
+DROP CONSTRAINT leave_applications_user_id_fkey;
+
+ALTER TABLE leave_applications
+ADD CONSTRAINT leave_applications_user_id_fkey
+FOREIGN KEY (user_id) REFERENCES users(user_id)
+ON DELETE CASCADE;
+----------------------------------------------------
+
+
+
+CREATE TABLE leave_data (
+    user_id    VARCHAR(150) PRIMARY KEY,  -- user_id references Users(user_id), ensuring each user_id is unique
+    name       VARCHAR(100),  -- Store name directly, as it is not needed as a foreign key
+    EL         FLOAT DEFAULT 25,  -- Default value for EL
+    SL         FLOAT DEFAULT 5,   -- Default value for SL
+    CL         FLOAT DEFAULT 10,  -- Default value for CL
+    CO         FLOAT DEFAULT 0,   -- Default value for CO
+    SO         FLOAT DEFAULT 0,   -- Default value for SO
+    SML        FLOAT DEFAULT 0,   -- Default value for SML
+    ML         FLOAT DEFAULT 0,   -- Default value for ML
+    CW         FLOAT DEFAULT 0,   -- Default value for CW
+    OOD        FLOAT DEFAULT 0,   -- Default value for OOD
+    HL         FLOAT DEFAULT 0,   -- Default value for HL
+    COL        FLOAT DEFAULT 0,   -- Default value for COL
+    WFH        FLOAT DEFAULT 0,   -- Default value for WFH
+    WO         FLOAT DEFAULT 0,   -- Default value for WO
+    MP         FLOAT DEFAULT 0,   -- Default value for MP
+    A          FLOAT DEFAULT 0,   -- Default value for A
+    FOREIGN KEY (user_id) REFERENCES Users(user_id) ON DELETE CASCADE  -- user_id as foreign key with delete cascade
+);
+CREATE OR REPLACE FUNCTION insert_leave_data_after_user_creation()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Insert a new row into the leave_data table with default values
+  INSERT INTO leave_data (user_id, name)
+  VALUES (NEW.user_id, NEW.name);
+  
+  -- Return the new user data (as required by triggers)
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+
+CREATE TRIGGER after_user_insert
+AFTER INSERT ON Users
+FOR EACH ROW
+EXECUTE FUNCTION insert_leave_data_after_user_creation();
+
+-- Create or replace the function with the new name
+CREATE OR REPLACE FUNCTION leave_data_updated_timestamp()
+RETURNS TRIGGER AS $$ 
+BEGIN
+  NEW.updated_time = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create the trigger with the new function name
+CREATE TRIGGER update_leave_data_timestamp
+BEFORE UPDATE ON leave_data
+FOR EACH ROW
+EXECUTE FUNCTION leave_data_updated_timestamp();
+----------------------------------------------------------------
+
+
+CREATE TABLE IF NOT EXISTS Attendance (
+    attendance_id SERIAL PRIMARY KEY,
+	user_id VARCHAR(150),
+    name VARCHAR(100),
+    date DATE NOT NULL,
+    in_time TIME DEFAULT '09:30:00',
+    out_time TIME DEFAULT '17:00:00',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES Users(user_id)
+);
+
+ALTER TABLE Attendance 
+ADD COLUMN department VARCHAR(100);
+ALTER TABLE Attendance 
+ADD COLUMN status VARCHAR(10) GENERATED ALWAYS AS (
+    CASE 
+        WHEN EXTRACT(EPOCH FROM (out_time - in_time)) / 3600 >= 8 THEN 'Present'
+        ELSE 'Absent'
+    END
+) STORED;
+
+
+# due to cant delet users, that method is used:
+-- Drop the existing foreign key constraint
+ALTER TABLE attendance
+DROP CONSTRAINT fk_user;
+
+-- Add a new foreign key constraint with ON DELETE CASCADE
+ALTER TABLE attendance
+ADD CONSTRAINT fk_user
+FOREIGN KEY (user_id) REFERENCES users(user_id)
+ON DELETE CASCADE;
+------------------------------------------------
+
+
+CREATE TABLE holidays (
+  id SERIAL PRIMARY KEY,
+  title VARCHAR(255) NOT NULL,
+  upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE Attendance
+ADD CONSTRAINT unique_user_date UNIQUE (user_id, date);
+
+
+============================================
+-- Add profile_picture column to leave_applications table
+ALTER TABLE leave_applications
+ADD COLUMN profile_picture VARCHAR(255);
+
+-- Create or replace a trigger function to update profile_picture in leave_applications
+CREATE OR REPLACE FUNCTION update_profile_picture()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Set the profile_picture in leave_applications based on user_id
+  NEW.profile_picture := (
+    SELECT profile_picture
+    FROM users
+    WHERE users.user_id = NEW.user_id
+  );
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create a trigger that fires before INSERT or UPDATE on leave_applications
+CREATE TRIGGER sync_profile_picture
+BEFORE INSERT OR UPDATE ON leave_applications
+FOR EACH ROW
+EXECUTE FUNCTION update_profile_picture();
+============================================================
+
+----------insert queries----------------------------
+  INSERT INTO Roles (role_name)
+  VALUES 
+  ('Admin'),
+  ('Manager'),
+  ('HR Manager'),
+  ('Employee');
+
+-- Insert data into Users
+INSERT INTO Users (name, email,user_id, role_name, password)
+VALUES
+('Alice', 'alice@example.com', 'AA123', 'Admin', 'password123'),
+('Bob', 'bob@example.com','BB123', 'Manager', 'password456'),
+('Charlie', 'charlie@example.com','CC123', 'HR Manager', 'password789'),
+('Emp', 'fox@gmail.com','EE123', 'Employee', 'password000'),
+('sample', 'x@x.com','SS123', 'Admin', 'x');
+
+
+INSERT INTO LeaveRequests (user_id, type, start_date, start_half_day, end_date, end_half_day, status, reason)
+VALUES
+(1, 'Sick Leave', '2024-12-01', 'Full', '2024-12-01', 'Full', 'Approved', 'Fever and cold'),
+(2, 'Casual Leave', '2024-12-02', 'First Half', '2024-12-02', 'First Half', 'Pending', 'Family errand'),
+(3, 'Annual Leave', '2024-12-03', 'Full', '2024-12-04', 'Full', 'Pending', 'Vacation with family');
+
+INSERT INTO Permissions (user_id, date, in_time, out_time, reason) 
+VALUES (1, '2024-12-10', '09:00', '17:00', 'Medical Appointment'); 
+
+INSERT INTO LeaveBalance (user_id, EL, SL, CL, CO, SO, SML, ML, CW, OOD, HL, COL, WFH, WO, MP, A)
+VALUES
+-- Alice (Admin)
+(1, 15.0, 8.0, 6.0, 3.0, 2.0, 3.0, 0.0, 0.0, 1.0, 2.0, 1.0, 5.0, 4.0, 0.0, 0.0),
+
+-- Bob (Manager)
+(2, 12.0, 5.0, 4.0, 2.0, 1.0, 1.0, 0.0, 0.0, 0.5, 1.0, 0.5, 3.0, 4.0, 0.0, 0.0),
+
+-- Charlie (HR Manager)
+(3, 10.0, 6.0, 7.0, 2.0, 0.0, 0.0, 0.0, 1.0, 0.0, 2.0, 0.0, 2.0, 4.0, 0.0, 0.0),
+
+-- Diana (Employee)
+(4, 8.0, 4.0, 3.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.5, 1.0, 0.0, 3.0, 4.0, 0.0, 0.0);
+

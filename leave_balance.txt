@@ -1,0 +1,235 @@
+CREATE TABLE leave_balance (
+    user_id       VARCHAR(150) PRIMARY KEY,  
+    name          VARCHAR(100),  
+    role_name     VARCHAR(50),  
+    
+    EL_available  FLOAT DEFAULT 0,  
+    EL_availed    FLOAT DEFAULT 0,   
+    EL_balance    FLOAT GENERATED ALWAYS AS (EL_available - EL_availed) STORED,  
+    
+    SL_available  FLOAT DEFAULT 0,   
+    SL_availed    FLOAT DEFAULT 0,   
+    SL_balance    FLOAT GENERATED ALWAYS AS (SL_available - SL_availed) STORED,  
+    
+    CL_available  FLOAT DEFAULT 0,  
+    CL_availed    FLOAT DEFAULT 0,   
+    CL_balance    FLOAT GENERATED ALWAYS AS (CL_available - CL_availed) STORED,  
+    
+    CO_available  FLOAT DEFAULT 0,  
+    CO_availed    FLOAT DEFAULT 0,   
+    CO_balance    FLOAT GENERATED ALWAYS AS (CO_available - CO_availed) STORED,  
+    
+    OOD_available FLOAT DEFAULT 0,  
+    OOD_availed   FLOAT DEFAULT 0,   
+    OOD_balance   FLOAT GENERATED ALWAYS AS (OOD_available - OOD_availed) STORED,  
+    
+    SML_available FLOAT DEFAULT 0,  
+    SML_availed   FLOAT DEFAULT 0,   
+    SML_balance   FLOAT GENERATED ALWAYS AS (SML_available - SML_availed) STORED,  
+    
+    WFH_available FLOAT DEFAULT 0,  
+    
+    A_available   FLOAT DEFAULT 0,  
+    A_availed     FLOAT DEFAULT 0,   
+    A_balance     FLOAT GENERATED ALWAYS AS (A_available - A_availed) STORED,  
+    
+    ML_available  FLOAT DEFAULT 0,  
+    ML_availed    FLOAT DEFAULT 0,   
+    ML_balance    FLOAT GENERATED ALWAYS AS (ML_available - ML_availed) STORED,  
+    
+    PL_available  FLOAT DEFAULT 0,  
+    PL_availed    FLOAT DEFAULT 0,   
+    PL_balance    FLOAT GENERATED ALWAYS AS (PL_available - PL_availed) STORED,  
+    
+    MP_available  FLOAT DEFAULT 0,  
+    MP_availed    FLOAT DEFAULT 0,   
+    MP_balance    FLOAT GENERATED ALWAYS AS (MP_available - MP_availed) STORED, 
+
+    updated_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
+    
+    FOREIGN KEY (user_id) REFERENCES Users(user_id) ON DELETE CASCADE
+);
+
+---------------
+CREATE OR REPLACE FUNCTION autofill_role()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Automatically set role_name and name in leave_balance based on the Users table
+    SELECT role_name, name
+    INTO NEW.role_name, NEW.name
+    FROM Users
+    WHERE user_id = NEW.user_id;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+----------------------
+CREATE TRIGGER autofill_role_trigger
+BEFORE INSERT OR UPDATE ON leave_balance
+FOR EACH ROW
+EXECUTE FUNCTION autofill_role();
+------------------
+
+CREATE OR REPLACE FUNCTION insert_leave_balance_after_user_creation()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO leave_balance (user_id, name)
+  VALUES (NEW.user_id, NEW.name);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+
+CREATE TRIGGER after_user_insert_auto_add_leave_balance
+AFTER INSERT ON Users
+FOR EACH ROW
+EXECUTE FUNCTION insert_leave_balance_after_user_creation();
+
+-- Create or replace the function with the new name
+CREATE OR REPLACE FUNCTION leave_balance_updated_timestamp()
+RETURNS TRIGGER AS $$ 
+BEGIN
+  NEW.updated_time = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create the trigger with the new function name
+CREATE TRIGGER update_leave_balance_timestamp
+BEFORE UPDATE ON leave_data
+FOR EACH ROW
+EXECUTE FUNCTION leave_balance_updated_timestamp();
+-------------------------------------------------
+---------------------------------------------------
+--------------------leave_set_admin-----------------------
+-------------------------------------------
+-------------------------------------------------
+-- Step 1: Create the `leave_set_admin` table
+CREATE TABLE leave_set_admin (
+    role_name      VARCHAR(50) PRIMARY KEY, -- Reference to Roles.role_name
+    EL_default     FLOAT DEFAULT 0,        -- Default Earned Leave
+    SL_default     FLOAT DEFAULT 0,        -- Default Sick Leave
+    CL_default     FLOAT DEFAULT 0,        -- Default Casual Leave
+    CO_default     FLOAT DEFAULT 0,        -- Default Compensatory Off
+    OOD_default    FLOAT DEFAULT 0,        -- Default On-Duty Leave
+    SML_default    FLOAT DEFAULT 0,        -- Default Special Medical Leave
+    WFH_default    FLOAT DEFAULT -1,       -- Default Work From Home (-1 means unlimited)
+    A_default      FLOAT DEFAULT 0,        -- Default Annual Leave
+    ML_default     FLOAT DEFAULT 0,        -- Default Maternity Leave
+    PL_default     FLOAT DEFAULT 0,        -- Default Paternity Leave
+    MP_default     FLOAT DEFAULT 0         -- Default Marriage Leave
+);
+
+
+CREATE OR REPLACE FUNCTION add_default_leave_set()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Insert default values for the new role into `leave_set_admin`
+    INSERT INTO leave_set_admin (role_name, EL_default, SL_default, CL_default, CO_default, OOD_default, SML_default, WFH_default, A_default, ML_default, PL_default, MP_default)
+    VALUES (
+        NEW.role_name, -- Use the role_name from the Roles table
+        20,            -- Default Earned Leave (can be adjusted)
+        10,            -- Default Sick Leave
+        10,            -- Default Casual Leave
+        0,             -- Default Compensatory Off
+        0,             -- Default On-Duty Leave
+        0,             -- Default Special Medical Leave
+        0,             -- Default Work From Home
+        0,             -- Default Annual Leave
+        0,             -- Default Maternity Leave
+        0,             -- Default Paternity Leave
+        0              -- Default Marriage Leave
+    );
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+----------
+CREATE TRIGGER add_leave_set_trigger
+AFTER INSERT ON Roles
+FOR EACH ROW
+EXECUTE FUNCTION add_default_leave_set();
+--------
+CREATE OR REPLACE FUNCTION set_default_leave_values()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Fetch default leave values for the role from leave_set_admin
+    SELECT 
+        EL_default, SL_default, CL_default, CO_default, OOD_default, 
+        SML_default, WFH_default, A_default, ML_default, PL_default, MP_default
+    INTO 
+        NEW.EL_available, NEW.SL_available, NEW.CL_available, NEW.CO_available, NEW.OOD_available, 
+        NEW.SML_available, NEW.WFH_available, NEW.A_available, NEW.ML_available, NEW.PL_available, NEW.MP_available
+    FROM leave_set_admin
+    WHERE role_name = NEW.role_name;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+
+CREATE TRIGGER default_leave_values_trigger
+BEFORE INSERT ON leave_balance
+FOR EACH ROW
+EXECUTE FUNCTION set_default_leave_values();
+
+-------------
+"if want to update the updated default values to existing users:
+UPDATE leave_balance lb
+SET
+    EL_available = ls.EL_default,
+    SL_available = ls.SL_default,
+    CL_available = ls.CL_default,
+    CO_available = ls.CO_default,
+    OOD_available = ls.OOD_default,
+    SML_available = ls.SML_default,
+    WFH_available = ls.WFH_default,
+    A_available = ls.A_default,
+    ML_available = ls.ML_default,
+    PL_available = ls.PL_default,
+    MP_available = ls.MP_default
+FROM leave_set_admin ls
+WHERE lb.role_name = ls.role_name;
+
+"
+-------------------
+
+
+
+
+router.put('/update-leave-status/:id', async (req, res) => { 
+    //bending for 
+        //leave_data for leave rebalance once rejected
+
+
+
+
+Done:
+leave form,
+leave assign,
+leave status, 
+permission,
+permission status,
+user register,
+calender,
+leave Reports
+attandance
+
+
+Validation:
+* leave start date > joining date
+* leave balance rebalance if 'rejected'
+
+########################
+* reduce leave DONE
+* get status DONE
+* auto insert users in leave_balanvce and auto insert leave_balance based on role DONE
+* leave_balance page is done in localhost:8000/xxx
+* leave_balance (xxx) server in leave_balanvce.js
+
+
+* permission time format
+* calender color
+
+

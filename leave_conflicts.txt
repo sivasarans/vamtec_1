@@ -1,0 +1,46 @@
+CREATE OR REPLACE FUNCTION check_leave_dates_to_avoid_leavepermission_conflicts() 
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Check for overlap with the Permissions table
+    IF EXISTS (
+        SELECT 1
+        FROM Permissions
+        WHERE user_id = NEW.user_id
+          AND date BETWEEN NEW.from_date AND NEW.to_date
+    ) THEN
+        RAISE EXCEPTION 'Leave dates overlap with permission dates for user_id: %', NEW.user_id;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER validate_leave_dates_to_avoid_leavepermission_conflicts 
+BEFORE INSERT OR UPDATE ON leave_applications
+FOR EACH ROW
+EXECUTE FUNCTION check_leave_dates_to_avoid_leavepermission_conflicts();
+
+
+--------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION check_permission_dates_to_avoid_leave_conflicts()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Check for overlap with the leave_applications table
+    IF EXISTS (
+        SELECT 1
+        FROM leave_applications
+        WHERE user_id = NEW.user_id
+          AND NEW.date BETWEEN from_date AND to_date
+    ) THEN
+        RAISE EXCEPTION 'Permission date overlaps with leave dates for user_id: %', NEW.user_id;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER validate_permission_dates_to_avoid_leave_conflicts
+BEFORE INSERT OR UPDATE ON Permissions
+FOR EACH ROW
+EXECUTE FUNCTION check_permission_dates_to_avoid_leave_conflicts();
+
+----------------------------------------------------------------
